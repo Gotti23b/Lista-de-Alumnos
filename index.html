@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lista de alumnos</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <h1>Lista de alumnos</h1>
+
+    <section class="panel">
+      <h2>Cargar lista</h2>
+      <input id="fileInput" type="file" accept=".txt,.csv,text/plain,text/csv">
+    </section>
+
+    <section class="panel">
+      <h2>Alumnos</h2>
+      <ul id="studentList" class="student-list"></ul>
+      <p id="emptyMessage">No hay alumnos cargados.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Asistencia</h2>
+      <button id="listenButton" type="button">🎙️ Comenzar</button>
+      <p id="status">Micrófono detenido.</p>
+      <p id="recognized"></p>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
