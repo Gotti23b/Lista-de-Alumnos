@@ -1,0 +1,35 @@
+name: Configure Supabase
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Supabase and remove workflow
+        env:
+          SUPABASE_URL: https://tupusmtfffbvnqaqmucy.supabase.co
+          SUPABASE_KEY: sb_publishable_JKwRnJGwS7Sf_t-aR7BB1w_KKDIIwL2
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('url: "",     // ej: "https://abcdefghij.supabase.co"', f'url: "{__import__("os").environ["SUPABASE_URL"]}",')
+          s = s.replace('anonKey: ""  // la "anon public" key de tu proyecto de Supabase', f'anonKey: "{__import__("os").environ["SUPABASE_KEY"]}"')
+          p.write_text(s, encoding='utf-8')
+          PY
+          rm -f .github/workflows/configure-supabase.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html .github/workflows/configure-supabase.yml
+          git commit -m 'Conectar Lista de Alumnos con Supabase'
+          git push
