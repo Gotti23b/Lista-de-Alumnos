@@ -1,6 +1,10 @@
 (function () {
   "use strict";
 
+  // Se muestra abajo de todo en Configuración. Sirve para saber de un vistazo si
+  // el dispositivo está usando la versión nueva o una copia vieja en caché.
+  const VERSION = "2026-09-15";
+
   /* ============ helpers ============ */
   function normalize(s) {
     return (s || "")
@@ -529,6 +533,10 @@
   let supabaseClient = null;
   let usersUnsub = null;
   let usersList = [];
+  // Recarga la lista de usuarios a pedido. La sincronización en vivo ya la
+  // refresca sola, pero después de crear o dar de baja queremos verlo al toque
+  // aunque el aviso en tiempo real tarde o no esté configurado.
+  let recargarUsuarios = async () => {};
 
   function applyRoleUI(role) {
     const allowed = ROLE_TABS[role] || ["comedor"];
@@ -576,7 +584,8 @@
     // El trigger que crea la fila en user_roles corre justo después del login;
     // en la práctica es instantáneo, pero reintentamos un par de veces por las dudas.
     for (let i = 0; i < 5; i++) {
-      const { data, error } = await client.from("user_roles").select("role,email").eq("user_id", userId).maybeSingle();
+      const { data, error } = await client.from("user_roles")
+        .select("role,email,activo,debe_cambiar_clave").eq("user_id", userId).maybeSingle();
       if (error) { console.error("user_roles:", error); return null; }
       if (data) return data;
       await new Promise((r) => setTimeout(r, 500));
@@ -587,16 +596,64 @@
   function watchUsers(client) {
     if (usersUnsub) { usersUnsub(); usersUnsub = null; }
     async function loadAndEmit() {
-      const { data, error } = await client.from("user_roles").select("id,email,role").order("email", { ascending: true });
+      const { data, error } = await client.from("user_roles")
+        .select("id,user_id,email,role,activo,debe_cambiar_clave,ultimo_ingreso")
+        .order("email", { ascending: true });
       if (error) { console.error("user_roles list:", error); return; }
       usersList = data || [];
       renderUsers();
     }
+    recargarUsuarios = loadAndEmit;
     loadAndEmit();
     const channel = client.channel("user_roles-changes-" + uid())
       .on("postgres_changes", { event: "*", schema: "public", table: "user_roles" }, loadAndEmit)
       .subscribe();
     usersUnsub = () => client.removeChannel(channel);
+  }
+
+  // Llama a la función que corre del lado de Supabase (la que tiene la clave de
+  // administrador). Todo lo que sea crear usuarios, blanquear claves o dar de
+  // baja pasa por acá: desde la página no se puede hacer directamente, y está
+  // bien que así sea.
+  async function llamarAdmin(accion, datos) {
+    if (!supabaseClient) return { error: "Esta función necesita Supabase configurado." };
+    try {
+      const { data, error } = await supabaseClient.functions.invoke("admin-usuarios", {
+        body: Object.assign({ accion: accion }, datos || {}),
+      });
+      if (error) {
+        // El cuerpo del error trae el mensaje que devolvió la función
+        let detalle = error.message || "Error desconocido";
+        try {
+          const ctx = error.context;
+          if (ctx && typeof ctx.json === "function") {
+            const j = await ctx.json();
+            if (j && j.error) detalle = j.error;
+          }
+        } catch (e) { /* nos quedamos con el mensaje genérico */ }
+        if (/Failed to send|fetch/i.test(detalle)) {
+          detalle = "No se encontró la función 'admin-usuarios' en Supabase. Revisá el Paso 3d del README.";
+        }
+        return { error: detalle };
+      }
+      if (data && data.error) return { error: data.error };
+      return { ok: true, mensaje: (data && data.mensaje) || "Listo." };
+    } catch (e) {
+      return { error: String((e && e.message) || e) };
+    }
+  }
+
+  function avisoUsuario(html, clase) {
+    const wrap = document.getElementById("usuarioAviso");
+    if (!wrap) return;
+    wrap.innerHTML = html ? '<div class="' + (clase || "aviso-clave") + '">' + html + '</div>' : "";
+  }
+
+  function fmtUltimoIngreso(valor) {
+    if (!valor) return "—";
+    const d = new Date(valor);
+    if (isNaN(d.getTime())) return "—";
+    return d.toLocaleDateString("es-AR") + " " + fmtHora(d);
   }
 
   function renderUsers() {
@@ -610,31 +667,125 @@
       const opts = ["director", "preceptor", "secretaria"].map((r) =>
         '<option value="' + r + '"' + (r === u.role ? " selected" : "") + '>' + ROLE_LABELS[r] + '</option>'
       ).join("");
-      return '<tr data-id="' + u.id + '">' +
-        '<td>' + escapeHtml(u.email) + '</td>' +
+      const activo = u.activo !== false;
+      let estado;
+      if (!activo) estado = '<span class="badge critical">De baja</span>';
+      else if (u.debe_cambiar_clave) estado = '<span class="badge warning">Debe cambiar la clave</span>';
+      else estado = '<span class="badge good">Activo</span>';
+      const esYo = u.email === state.currentEmail;
+      return '<tr data-id="' + u.id + '" data-uid="' + escapeHtml(u.user_id || "") + '">' +
+        '<td>' + escapeHtml(u.email) + (esYo ? ' <span class="badge neutral">vos</span>' : "") + '</td>' +
         '<td><select class="role-select role-select-input">' + opts + '</select></td>' +
-        '<td class="actions"><button class="btn small primary btn-role-save" disabled>Guardar</button></td>' +
+        '<td>' + estado + '</td>' +
+        '<td>' + escapeHtml(fmtUltimoIngreso(u.ultimo_ingreso)) + '</td>' +
+        '<td class="actions">' +
+          '<button class="btn small primary btn-role-save" disabled>Guardar</button> ' +
+          '<button class="btn small subtle btn-clave">Blanquear clave</button>' +
+          (esYo ? "" : ' <button class="btn small ' + (activo ? "danger" : "subtle") + ' btn-baja">' + (activo ? "Dar de baja" : "Reactivar") + '</button>') +
+        '</td>' +
         '</tr>';
     }).join("");
+
     body.querySelectorAll("tr[data-id]").forEach((tr) => {
+      const id = tr.dataset.id;
+      const uid = tr.dataset.uid;
+      const u = usersList.find((x) => x.id === id) || { email: id };
       const sel = tr.querySelector(".role-select-input");
       const saveBtn = tr.querySelector(".btn-role-save");
+
       sel.addEventListener("change", () => { saveBtn.disabled = false; });
       saveBtn.addEventListener("click", async () => {
-        const id = tr.dataset.id;
         const newRole = sel.value;
-        const u = usersList.find((x) => x.id === id) || { email: id };
         const { error } = await supabaseClient.from("user_roles").update({ role: newRole }).eq("id", id);
         if (error) { toast("No se pudo guardar el rol: " + error.message, "critical"); return; }
         saveBtn.disabled = true;
         audit("Cambio de rol", u.email + " → " + (ROLE_LABELS[newRole] || newRole));
         toast("Rol actualizado.");
+        await recargarUsuarios();
         if (u.email === state.currentEmail && newRole !== "director") {
           toast("Te cambiaste tu propio rol: vas a perder el acceso de Director al recargar.", "critical");
         }
       });
+
+      // ---- Blanquear la contraseña ----
+      tr.querySelector(".btn-clave").addEventListener("click", () => {
+        const celda = tr.querySelector(".actions");
+        celda.innerHTML = '<input type="text" class="edit-input inp-clave" placeholder="Contraseña nueva" style="width:150px;display:inline-block;"> ' +
+          '<button class="btn small primary btn-clave-ok">Guardar</button> ' +
+          '<button class="btn small subtle btn-clave-no">Cancelar</button>';
+        const inp = celda.querySelector(".inp-clave");
+        inp.focus();
+        celda.querySelector(".btn-clave-no").addEventListener("click", () => renderUsers());
+        celda.querySelector(".btn-clave-ok").addEventListener("click", async () => {
+          const nueva = inp.value.trim();
+          if (nueva.length < 6) { toast("La contraseña tiene que tener al menos 6 caracteres.", "critical"); return; }
+          const btn = celda.querySelector(".btn-clave-ok");
+          btn.disabled = true; btn.textContent = "Guardando…";
+          const r = await llamarAdmin("blanquear", { user_id: uid, password: nueva });
+          if (r.error) { toast(r.error, "critical"); renderUsers(); return; }
+          audit("Blanqueo de contraseña", u.email);
+          await recargarUsuarios();
+          avisoUsuario("Contraseña de <strong>" + escapeHtml(u.email) + "</strong> cambiada a <code>" + escapeHtml(nueva) +
+            "</code> — pasásela y la próxima vez que entre la app le va a pedir elegir una propia.");
+          toast("Contraseña cambiada.");
+          renderUsers();
+        });
+      });
+
+      // ---- Dar de baja / reactivar ----
+      const btnBaja = tr.querySelector(".btn-baja");
+      if (btnBaja) {
+        btnBaja.addEventListener("click", () => {
+          const activo = u.activo !== false;
+          const celda = tr.querySelector(".actions");
+          celda.innerHTML = '<span style="font-size:12.5px;color:var(--ink-2);margin-right:6px;">¿' +
+            (activo ? "Dar de baja" : "Reactivar") + '?</span>' +
+            '<button class="btn small ' + (activo ? "danger" : "primary") + ' btn-baja-si">Sí</button> ' +
+            '<button class="btn small subtle btn-baja-no">Cancelar</button>';
+          celda.querySelector(".btn-baja-no").addEventListener("click", () => renderUsers());
+          celda.querySelector(".btn-baja-si").addEventListener("click", async () => {
+            const r = await llamarAdmin(activo ? "desactivar" : "activar", { user_id: uid });
+            if (r.error) { toast(r.error, "critical"); renderUsers(); return; }
+            audit(activo ? "Baja de usuario" : "Reactivación de usuario", u.email);
+            toast(r.mensaje);
+            await recargarUsuarios();
+            renderUsers();
+          });
+        });
+      }
     });
   }
+
+  /* ---- Alta de usuarios ---- */
+  const nuevoUsuarioForm = document.getElementById("nuevoUsuarioForm");
+  document.getElementById("btnToggleNuevoUsuario").addEventListener("click", () => {
+    nuevoUsuarioForm.classList.toggle("open");
+    if (nuevoUsuarioForm.classList.contains("open")) document.getElementById("nuEmail").focus();
+  });
+
+  document.getElementById("btnCrearUsuario").addEventListener("click", async () => {
+    const email = document.getElementById("nuEmail").value.trim().toLowerCase();
+    const password = document.getElementById("nuPassword").value.trim();
+    const role = document.getElementById("nuRole").value;
+    if (email.indexOf("@") === -1) { toast("Escribí un email válido.", "critical"); return; }
+    if (password.length < 6) { toast("La contraseña tiene que tener al menos 6 caracteres.", "critical"); return; }
+
+    const btn = document.getElementById("btnCrearUsuario");
+    btn.disabled = true; btn.textContent = "Creando…";
+    const r = await llamarAdmin("crear", { email: email, password: password, role: role });
+    btn.disabled = false; btn.textContent = "Crear";
+    if (r.error) { toast(r.error, "critical"); return; }
+
+    audit("Alta de usuario", email + " como " + (ROLE_LABELS[role] || role));
+    await recargarUsuarios();
+    avisoUsuario("Usuario creado. Pasale estos datos:<br>Email: <code>" + escapeHtml(email) +
+      "</code><br>Contraseña: <code>" + escapeHtml(password) +
+      "</code><br>La primera vez que entre, la app le va a pedir que elija una contraseña propia.");
+    document.getElementById("nuEmail").value = "";
+    document.getElementById("nuPassword").value = "";
+    nuevoUsuarioForm.classList.remove("open");
+    toast("Usuario creado.");
+  });
 
   function initSupabaseAuth(client) {
     const gate = document.getElementById("authGate");
@@ -643,9 +794,10 @@
     const errBox = document.getElementById("authError");
     const submitBtn = document.getElementById("authSubmit");
     const subtitle = document.getElementById("authSubtitle");
-    const btnForgot = document.getElementById("btnForgot");
+    const authAyuda = document.getElementById("authAyuda");
     const btnAuthCancel = document.getElementById("btnAuthCancel");
-    let modoPassword = false;   // true mientras se está eligiendo una contraseña nueva
+    let modoPassword = false;      // true mientras se está eligiendo una contraseña nueva
+    let claveObligatoria = false;  // true cuando entró con una clave asignada por el Director
 
     function showGate(msg) {
       gate.hidden = false;
@@ -657,7 +809,7 @@
       modoPassword = false;
       form.hidden = false;
       newPassForm.hidden = true;
-      btnForgot.hidden = false;
+      authAyuda.hidden = false;
       btnAuthCancel.hidden = true;
       subtitle.textContent = "Ingresá con tu usuario y contraseña para controlar el comedor.";
       errBox.hidden = true;
@@ -667,7 +819,7 @@
       gate.hidden = false;
       form.hidden = true;
       newPassForm.hidden = false;
-      btnForgot.hidden = true;
+      authAyuda.hidden = true;
       btnAuthCancel.hidden = !permiteCancelar;
       subtitle.textContent = texto;
       errBox.hidden = true;
@@ -675,13 +827,10 @@
       document.getElementById("newPassword2").value = "";
     }
 
-    btnForgot.addEventListener("click", async () => {
-      const email = document.getElementById("authEmail").value.trim();
-      if (!email) { showGate("Escribí tu email arriba y volvé a tocar acá: te mandamos un link para cambiar la contraseña."); return; }
-      const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: window.location.href });
-      if (error) { showGate("No se pudo enviar el mail: " + error.message); return; }
-      showGate("Listo: si ese email tiene cuenta, le llega un link para poner una contraseña nueva. Revisá también el correo no deseado.");
-    });
+    // Al volver a escribir, limpiamos el error anterior para que no quede un
+    // mensaje rojo viejo contradiciendo lo que se está tipeando.
+    newPassForm.addEventListener("input", () => { errBox.hidden = true; });
+    form.addEventListener("input", () => { errBox.hidden = true; });
 
     btnAuthCancel.addEventListener("click", () => {
       modoLogin();
@@ -699,10 +848,16 @@
       const { error } = await client.auth.updateUser({ password: p1 });
       btn.disabled = false; btn.textContent = "Guardar contraseña";
       if (error) { showGate("No se pudo cambiar la contraseña: " + error.message); return; }
+      // Ya eligió una propia: se le saca la marca de "tiene que cambiarla".
+      try { await client.rpc("marcar_clave_cambiada"); } catch (e) { console.error("marcar_clave_cambiada:", e); }
+      const veniaObligado = claveObligatoria;
+      claveObligatoria = false;
       modoPassword = false;
       modoLogin();
       gate.hidden = true;
       toast("Contraseña actualizada.");
+      // Si estaba trabado en la pantalla de clave, recargamos para entrar normal.
+      if (veniaObligado) setTimeout(() => location.reload(), 800);
     });
 
     document.getElementById("btnChangePass").addEventListener("click", () => {
@@ -734,9 +889,24 @@
       async function onSignedIn(session) {
         const roleRow = await fetchOwnRole(client, session.user.id);
         if (!roleRow) {
-          showGate("Tu usuario inició sesión pero todavía no tiene un rol asignado. Pedile al director que te lo asigne desde la pestaña Usuarios.");
+          showGate("Tu usuario inició sesión pero todavía no tiene un rol asignado. Pedile al director que te lo asigne desde Configuración → Usuarios y roles.");
           return;
         }
+        if (roleRow.activo === false) {
+          await client.auth.signOut();
+          showGate("Tu usuario está dado de baja. Si es un error, hablá con el Director.");
+          return;
+        }
+        // Entró con la contraseña que le puso el Director: no lo dejamos pasar
+        // hasta que elija una propia.
+        if (roleRow.debe_cambiar_clave && !claveObligatoria) {
+          claveObligatoria = true;
+          modoNuevaClave("Por seguridad, elegí tu propia contraseña antes de empezar.", false);
+          return;
+        }
+        if (claveObligatoria) return;   // sigue trabado hasta que la cambie
+
+        try { await client.rpc("registrar_ingreso"); } catch (e) { console.error("registrar_ingreso:", e); }
         hideGate();
         state.currentRole = roleRow.role;
         state.currentEmail = roleRow.email || session.user.email;
@@ -1098,7 +1268,7 @@
         '<a class="btn small primary" id="btnWhatsapp" href="' + waUrl + '" target="_blank" rel="noopener">Enviar por WhatsApp</a>' +
         (mail ? '<a class="btn small" href="' + mailUrl + '">Enviar por mail</a>' : "") +
       '</div>' +
-      (tel || mail ? "" : '<p class="panel-desc" style="margin-top:10px;">Tip: cargá el WhatsApp y el mail de preceptoría en la pestaña Usuarios para que estos botones ya vayan al destinatario correcto.</p>') +
+      (tel || mail ? "" : '<p class="panel-desc" style="margin-top:10px;">Tip: cargá el WhatsApp y el mail de preceptoría en Configuración → Del colegio, así estos botones ya van al destinatario correcto.</p>') +
       '</div>';
 
     const btnCopiar = document.getElementById("btnCopiarAviso");
@@ -1909,6 +2079,8 @@
     });
   }
   function renderConfigTab() {
+    const v = document.getElementById("appVersion");
+    if (v) v.textContent = VERSION;
     renderConfig();
     renderUsers();
     renderAudit();

@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Comedor French</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="estilos.css?v=20260915">
+
+<script>
+  // Aplica el tema y el tamaño guardados ANTES de pintar la página, para que no
+  // se vea un parpadeo claro→oscuro al abrir.
+  (function () {
+    try {
+      var t = localStorage.getItem("comedorFrench:tema");
+      if (t === "claro") document.documentElement.dataset.theme = "light";
+      else if (t === "oscuro") document.documentElement.dataset.theme = "dark";
+      var s = localStorage.getItem("comedorFrench:tamano");
+      if (s === "grande" || s === "enorme") document.documentElement.dataset.size = s;
+    } catch (e) { /* modo privado o storage bloqueado: se usa el tema del sistema */ }
+  })();
+</script>
+
+<script>
+  // ------------------------------------------------------------------------
+  // Configuración de Supabase: permite que varios dispositivos se sincronicen
+  // en tiempo real (sin recargar la página) cuando esta app está publicada
+  // fuera de Claude (por ejemplo en GitHub Pages). Ver README.md para los
+  // pasos de cómo obtener estos dos valores y crear las tablas.
+  // Si se deja vacío, la app sigue funcionando, pero cada dispositivo guarda
+  // sus datos por separado (sin sincronizar).
+  // Dentro de Claude, este bloque se ignora: se usa la base de datos propia
+  // del artifact, que ya sincroniza en tiempo real entre dispositivos.
+  // ------------------------------------------------------------------------
+  window.SUPABASE_CONFIG = {
+    url: "https://tupusmtfffbvnqaqmucy.supabase.co",
+    anonKey: "sb_publishable_JKwRnJGwS7Sf_t-aR7BB1w_KKDIIwL2"
+  };
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<div class="app" id="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <img class="crest" src="escudo.png?v=20260915" alt="Escudo del Colegio French">
+      <div class="brand-text">
+        <h1>Colegio French</h1>
+        <p class="subtitle">Control de comedor · doble escolaridad</p>
+      </div>
+    </div>
+    <div class="clock">
+      <span id="clockTime">--:--</span>
+      <span class="badge neutral" id="horarioBadge"><span class="badge-dot"></span>—</span>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab-btn" data-tab="comedor" role="tab" aria-selected="true" id="tabBtnComedor">Comedor</button>
+      <button class="tab-btn" data-tab="alumnos" role="tab" aria-selected="false" id="tabBtnAlumnos">Alumnos</button>
+      <button class="tab-btn" data-tab="reportes" role="tab" aria-selected="false" id="tabBtnReportes">Reportes</button>
+      <button class="tab-btn" data-tab="config" role="tab" aria-selected="false" id="tabBtnConfig">Configuración</button>
+    </nav>
+    <div class="user-chip" id="userChip" hidden>
+      <span class="user-email" id="userChipEmail"></span>
+      <span class="badge neutral" id="userChipRole"></span>
+      <button class="btn small subtle" id="btnChangePass" title="Cambiar mi contraseña">Clave</button>
+      <button class="btn small subtle" id="btnLogout">Salir</button>
+    </div>
+  </aside>
+
+  <div class="content">
+  <div class="offline-banner" id="offlineBanner" hidden></div>
+  <div class="conn-banner" id="connBanner" hidden></div>
+
+  <main>
+    <!-- ---------------- COMEDOR ---------------- -->
+    <section class="tab-panel" data-tab-panel="comedor">
+      <div id="alertWrap" style="margin-bottom:16px;"></div>
+
+      <div class="stat-row" style="margin-bottom:16px;">
+        <div class="stat-tile">
+          <div class="label">Se retiran a comedor</div>
+          <div class="value" id="statRetiran">0</div>
+        </div>
+        <div class="stat-tile">
+          <div class="label">Volvieron</div>
+          <div class="value" style="color:var(--good)" id="statVueltos">0</div>
+        </div>
+        <div class="stat-tile">
+          <div class="label">Pendientes</div>
+          <div class="value" style="color:var(--warning)" id="statPendientes">0</div>
+        </div>
+        <div class="stat-tile">
+          <div class="label">Alumnos en la nómina</div>
+          <div class="value" id="statTotal">0</div>
+        </div>
+      </div>
+
+      <div class="comedor-grid">
+        <div class="panel">
+          <h2>Registrar reingreso</h2>
+          <p class="panel-desc">El sistema solo registra cuando un alumno <strong>vuelve a ingresar</strong> al colegio. Presioná el micrófono y decí apellido y nombre, o buscalo manualmente.</p>
+
+          <div class="toolbar no-print" style="margin-top:14px;">
+            <button class="btn small" id="btnKiosk" aria-pressed="false" title="Agranda todo para usar la tablet parada en la puerta">Modo puerta</button>
+            <button class="btn small" id="btnMicContinuo" aria-pressed="false" title="El micrófono queda escuchando y registra uno atrás de otro">Micrófono continuo</button>
+          </div>
+
+          <div class="mic-wrap">
+            <button class="mic-btn" id="micBtn" title="Registrar por voz">🎤</button>
+            <div class="mic-status" id="micStatus">Presioná para hablar</div>
+            <div class="mic-transcript" id="micTranscript"></div>
+          </div>
+
+          <div id="candidatesWrap" class="candidates"></div>
+          <div id="lastActionWrap"></div>
+
+          <div class="manual-search">
+            <input type="search" id="manualInput" placeholder="Buscar manualmente por apellido, nombre o curso…" autocomplete="off">
+            <div class="manual-results" id="manualResults" hidden></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Alumnos que se retiran a comedor</h2>
+          <p class="panel-desc">Se compara contra esta lista quién ya volvió y quién sigue afuera. Se actualiza en vivo para todos los dispositivos.</p>
+          <div class="curso-filter no-print" id="cursoFilter"></div>
+          <div class="feed" id="retiroList"><div class="feed-empty">No hay alumnos marcados como "retira a comedor" todavía.</div></div>
+          <div class="curso-summary" id="cursoSummary"></div>
+          <div id="otrosWrap"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- ALUMNOS ---------------- -->
+    <section class="tab-panel" data-tab-panel="alumnos" hidden>
+      <div class="panel">
+        <h2>Nómina de alumnos</h2>
+        <p class="panel-desc">Cargá los alumnos uno por uno, pegá la lista o importá un Excel. No se permiten dos alumnos con el mismo apellido, nombre y curso.</p>
+
+        <div class="toolbar" style="margin-top:16px;">
+          <input type="search" id="rosterSearch" placeholder="Buscar por apellido, nombre o curso…">
+          <button class="btn primary" id="btnToggleAdd">+ Agregar alumno</button>
+          <button class="btn" id="btnToggleImport">Importar lista</button>
+          <button class="btn danger" id="btnClearAll" style="margin-left:auto;">Borrar toda la nómina</button>
+        </div>
+        <div id="clearAllConfirm"></div>
+
+        <div class="add-form" id="addForm">
+          <input type="text" id="addApellido" placeholder="Apellido">
+          <input type="text" id="addNombre" placeholder="Nombre">
+          <input type="text" id="addCurso" placeholder="Curso (opcional)">
+          <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--ink-2);">
+            <input type="checkbox" id="addRetira"> Se retira a comedor
+          </label>
+          <button class="btn primary" id="btnAddSubmit">Agregar</button>
+        </div>
+
+        <div class="import-form" id="importForm">
+          <div class="hint">Una línea por alumno: <code>Apellido, Nombre, Curso, Retira</code> (curso y "Retira" son opcionales; en "Retira" poné <code>si</code> para los alumnos que se retiran habitualmente a comedor). Se puede pegar directamente desde una planilla.</div>
+          <textarea id="importText" placeholder="Pérez, Juan, 5° A, si&#10;Gómez, Lucía, 5° B"></textarea>
+          <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button class="btn subtle" id="btnImportCancel">Cancelar</button>
+            <button class="btn primary" id="btnImportSubmit">Importar texto</button>
+          </div>
+          <div class="hint" style="border-top:1px solid var(--border); padding-top:10px; margin-top:2px;">O importar directamente desde un Excel (columnas en este orden: Apellido, Nombre, Curso, Retira; con o sin fila de encabezado):</div>
+          <input type="file" id="importExcelInput" accept=".xlsx,.xls">
+        </div>
+
+        <div class="table-wrap" id="rosterTableWrap">
+          <table class="roster" id="rosterTable" hidden>
+            <thead>
+              <tr><th>Apellido</th><th>Nombre</th><th>Curso</th><th>Retira a comedor</th><th></th></tr>
+            </thead>
+            <tbody id="rosterBody"></tbody>
+          </table>
+          <div class="empty-state" id="rosterEmpty">
+            <h3>Todavía no cargaste la nómina</h3>
+            <p>Agregá alumnos uno por uno o pegá la lista completa (aprox. 300 alumnos) para empezar a controlar el comedor.</p>
+            <button class="btn primary" id="btnEmptyImport">Pegar lista de alumnos</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- REPORTES ---------------- -->
+    <section class="tab-panel" data-tab-panel="reportes" hidden>
+      <div class="panel">
+        <h2>Reportes</h2>
+        <div class="reportes-toolbar no-print">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-2);">Desde <input type="date" id="reportDesde"></label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-2);">Hasta <input type="date" id="reportHasta"></label>
+          <button class="btn small" data-range="hoy">Hoy</button>
+          <button class="btn small" data-range="semana">Últimos 7 días</button>
+          <button class="btn small" data-range="mes">Este mes</button>
+          <button class="btn small primary" id="btnExportExcel">Exportar a Excel</button>
+          <button class="btn small" id="btnPrint">Imprimir / PDF</button>
+          <div class="legend">
+            <span class="legend-item"><span class="legend-swatch" style="background:var(--series-1)"></span>Reingresos por hora</span>
+          </div>
+        </div>
+        <div class="print-only" id="printHeader"></div>
+
+        <div class="stat-row" style="margin-bottom:6px;">
+          <div class="stat-tile">
+            <div class="label">Reingresos</div>
+            <div class="value series-1" id="repEntradas">0</div>
+          </div>
+          <div class="stat-tile">
+            <div class="label">No volvieron</div>
+            <div class="value" style="color:var(--critical)" id="repNoVolvieron">0</div>
+          </div>
+          <div class="stat-tile">
+            <div class="label">Alumnos distintos</div>
+            <div class="value" id="repAlumnos">0</div>
+          </div>
+        </div>
+
+        <div class="chart-wrap" id="chartWrap"></div>
+
+        <div class="table-wrap">
+          <table class="roster" id="reportTable" hidden>
+            <thead><tr><th>Fecha</th><th>Hora</th><th>Alumno</th><th>Curso</th><th>Método</th><th>Registrado por</th></tr></thead>
+            <tbody id="reportBody"></tbody>
+          </table>
+          <div class="empty-state" id="reportEmpty">
+            <h3>Sin reingresos</h3>
+            <p>No hay reingresos registrados para la fecha elegida.</p>
+          </div>
+        </div>
+
+        <div class="table-wrap" style="margin-top:22px;">
+          <h3 style="font-size:14px; margin-bottom:10px;">No volvieron ese día</h3>
+          <table class="roster" id="noVolvieronTable" hidden>
+            <thead><tr><th>Apellido</th><th>Nombre</th><th>Curso</th></tr></thead>
+            <tbody id="noVolvieronBody"></tbody>
+          </table>
+          <p class="panel-desc" id="noVolvieronEmpty">Todos los alumnos que se retiran habitualmente a comedor volvieron ese día.</p>
+          <p class="panel-desc" style="margin-top:6px;">Se calcula contra la lista actual de "retira a comedor"; si esa lista cambió después de estas fechas, el resultado puede no reflejar exactamente cómo estaba ese día.</p>
+        </div>
+
+        <div class="table-wrap" style="margin-top:22px;">
+          <h3 style="font-size:14px; margin-bottom:4px;">Resumen por alumno</h3>
+          <p class="panel-desc" style="margin:0 0 10px;">Sobre los días del rango en los que hubo actividad registrada. Sirve para ver quién falta seguido.</p>
+          <table class="roster" id="porAlumnoTable" hidden>
+            <thead><tr><th>Alumno</th><th>Curso</th><th>Volvió</th><th>No volvió</th><th>% que volvió</th></tr></thead>
+            <tbody id="porAlumnoBody"></tbody>
+          </table>
+          <p class="panel-desc" id="porAlumnoEmpty">Todavía no hay datos suficientes para este rango.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- USUARIOS ---------------- -->
+    <section class="tab-panel" data-tab-panel="config" hidden>
+
+      <!-- ---- Ajustes de este dispositivo (los ve y cambia cualquiera) ---- -->
+      <div class="panel">
+        <h2>Este dispositivo</h2>
+        <p class="panel-desc">Estos ajustes valen solo para este celular, tablet o computadora. No afectan a lo que ven los demás.</p>
+
+        <div class="cfg-grid">
+          <div class="cfg-row">
+            <div>
+              <div class="cfg-label">Tema</div>
+              <div class="cfg-hint">"Automático" sigue lo que tenga configurado el dispositivo.</div>
+            </div>
+            <div class="seg" id="segTema" role="group">
+              <button class="seg-btn" data-tema="auto">Automático</button>
+              <button class="seg-btn" data-tema="claro">Claro</button>
+              <button class="seg-btn" data-tema="oscuro">Oscuro</button>
+            </div>
+          </div>
+
+          <div class="cfg-row">
+            <div>
+              <div class="cfg-label">Tamaño de letra</div>
+              <div class="cfg-hint">Para leer de lejos en la tablet de la puerta.</div>
+            </div>
+            <div class="seg" id="segTamano" role="group">
+              <button class="seg-btn" data-tamano="normal">Normal</button>
+              <button class="seg-btn" data-tamano="grande">Grande</button>
+              <button class="seg-btn" data-tamano="enorme">Muy grande</button>
+            </div>
+          </div>
+
+          <div class="cfg-row">
+            <div>
+              <div class="cfg-label">Sonido al registrar</div>
+              <div class="cfg-hint">Un pitido corto cuando se marca un reingreso, para no depender de mirar la pantalla.</div>
+            </div>
+            <div class="seg" id="segSonido" role="group">
+              <button class="seg-btn" data-sonido="0">Sin sonido</button>
+              <button class="seg-btn" data-sonido="1">Con sonido</button>
+              <button class="btn small" id="btnProbarSonido" style="margin-left:8px;">Probar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---- Cuenta propia ---- -->
+      <div class="panel cfg-cuenta" id="panelCuenta" style="margin-top:16px;" hidden>
+        <h2>Mi cuenta</h2>
+        <p class="panel-desc">Sesión iniciada como <strong id="cuentaEmail">—</strong> <span class="badge neutral" id="cuentaRol"></span></p>
+        <div class="toolbar" style="margin-top:14px;">
+          <button class="btn" id="btnCfgCambiarClave">Cambiar mi contraseña</button>
+          <button class="btn subtle" id="btnCfgSalir">Cerrar sesión</button>
+        </div>
+      </div>
+
+      <!-- ---- Ajustes del colegio (solo Director) ---- -->
+      <div class="panel cfg-admin" style="margin-top:16px;">
+        <h2>Del colegio</h2>
+        <p class="panel-desc">Estos ajustes valen para todos los dispositivos y los cambia solo el Director.</p>
+
+        <div class="cfg-grid">
+          <div class="cfg-row">
+            <div>
+              <div class="cfg-label">Horario del comedor</div>
+              <div class="cfg-hint">Define cuándo la app muestra "horario de comedor" y desde qué hora avisa de los que no volvieron.</div>
+            </div>
+            <div class="seg">
+              <input type="time" id="cfgHoraDesde" class="cfg-input">
+              <span style="color:var(--ink-2); font-size:13px;">a</span>
+              <input type="time" id="cfgHoraHasta" class="cfg-input">
+            </div>
+          </div>
+
+          <div class="cfg-row">
+            <div>
+              <div class="cfg-label">Reconocimiento de voz</div>
+              <div class="cfg-hint">Qué tan seguro tiene que estar para registrar solo, sin preguntarte.</div>
+            </div>
+            <select id="cfgVoz" class="role-select">
+              <option value="cauto">Ante la duda, preguntar</option>
+              <option value="equilibrado">Equilibrado</option>
+              <option value="agil">Registrar solo más seguido</option>
+            </select>
+          </div>
+
+          <div class="cfg-row">
+            <div>
+              <div class="cfg-label">Contacto de preceptoría</div>
+              <div class="cfg-hint">A dónde van los botones de WhatsApp y mail del aviso. El WhatsApp con código de país y sin espacios ni signos: para Buenos Aires, <code>54911</code> + el número sin el 15.</div>
+            </div>
+            <div class="seg" style="flex-wrap:wrap;">
+              <input type="tel" id="cfgWhatsapp" class="cfg-input" placeholder="WhatsApp">
+              <input type="email" id="cfgEmail" class="cfg-input" placeholder="Mail">
+            </div>
+          </div>
+        </div>
+
+        <div class="toolbar" style="margin-top:16px;">
+          <button class="btn primary" id="btnSaveConfig">Guardar los ajustes del colegio</button>
+        </div>
+      </div>
+
+      <!-- ---- Respaldo (solo Director) ---- -->
+      <div class="panel cfg-admin" style="margin-top:16px;">
+        <h2>Copia de seguridad</h2>
+        <p class="panel-desc">Baja un Excel con toda la nómina y todos los reingresos registrados hasta hoy, en dos hojas. Conviene guardarlo cada tanto por fuera de la app.</p>
+        <div class="toolbar" style="margin-top:14px;">
+          <button class="btn primary" id="btnBackup">Descargar copia de seguridad</button>
+          <span class="cfg-hint" id="backupEstado"></span>
+        </div>
+      </div>
+
+      <!-- ---- Usuarios y roles (solo Director) ---- -->
+      <div class="panel cfg-admin" style="margin-top:16px;">
+        <h2>Usuarios y roles</h2>
+        <p class="panel-desc">Creá la cuenta acá abajo con su email y una contraseña inicial, y pasale esos datos por WhatsApp o en mano. La primera vez que entre, la app le va a pedir que elija una contraseña propia. Ojo: no te saques a vos mismo el rol de Director si sos el único, porque nadie más va a poder administrar usuarios.</p>
+
+        <div class="toolbar" style="margin-top:16px;">
+          <button class="btn primary" id="btnToggleNuevoUsuario">+ Crear usuario</button>
+        </div>
+
+        <div class="add-form" id="nuevoUsuarioForm">
+          <input type="email" id="nuEmail" placeholder="Email" autocomplete="off">
+          <input type="text" id="nuPassword" placeholder="Contraseña inicial (mínimo 6)" autocomplete="off">
+          <select id="nuRole" class="role-select">
+            <option value="preceptor">Preceptor</option>
+            <option value="secretaria">Secretaría</option>
+            <option value="director">Director</option>
+          </select>
+          <button class="btn primary" id="btnCrearUsuario">Crear</button>
+          <div class="hint" style="grid-column:1/-1;">La contraseña se muestra a propósito, para que puedas dictarla. Se la pasás vos: no se manda ningún mail.</div>
+        </div>
+        <div id="usuarioAviso"></div>
+
+        <div class="table-wrap" id="usersTableWrap" style="margin-top:16px;">
+          <table class="roster" id="usersTable" hidden>
+            <thead><tr><th>Email</th><th>Rol</th><th>Estado</th><th>Último ingreso</th><th></th></tr></thead>
+            <tbody id="usersBody"></tbody>
+          </table>
+          <div class="empty-state" id="usersEmpty">
+            <h3>Todavía no hay usuarios</h3>
+            <p>Tocá "Crear usuario" para dar de alta al primero.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel cfg-admin" style="margin-top:16px;">
+        <h2>Historial de cambios</h2>
+        <p class="panel-desc">Quién agregó, editó o borró alumnos, y quién cambió roles. Se muestran los últimos 200 movimientos.</p>
+        <div class="table-wrap" style="margin-top:14px;">
+          <table class="roster" id="auditTable" hidden>
+            <thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr></thead>
+            <tbody id="auditBody"></tbody>
+          </table>
+          <p class="panel-desc" id="auditEmpty">Todavía no hay movimientos registrados.</p>
+        </div>
+      </div>
+
+      <p class="cfg-version">Comedor French · versión <span id="appVersion">—</span></p>
+    </section>
+  </main>
+  </div>
+</div>
+
+<div class="auth-gate" id="authGate" hidden>
+  <div class="auth-card">
+    <h2>Colegio French</h2>
+    <p id="authSubtitle">Ingresá con tu usuario y contraseña para controlar el comedor.</p>
+    <form id="authForm">
+      <input type="email" id="authEmail" placeholder="Email" autocomplete="username" required>
+      <input type="password" id="authPassword" placeholder="Contraseña" autocomplete="current-password" required>
+      <button type="submit" class="btn primary" id="authSubmit">Ingresar</button>
+    </form>
+    <form id="newPassForm" hidden>
+      <input type="password" id="newPassword" placeholder="Nueva contraseña (mínimo 6)" autocomplete="new-password" minlength="6" required>
+      <input type="password" id="newPassword2" placeholder="Repetir la nueva contraseña" autocomplete="new-password" minlength="6" required>
+      <button type="submit" class="btn primary" id="newPassSubmit">Guardar contraseña</button>
+    </form>
+    <p class="auth-ayuda" id="authAyuda">Si olvidaste tu contraseña, pedísela al Director: te la cambia en el momento desde la app.</p>
+    <button class="auth-link" id="btnAuthCancel" hidden>Volver</button>
+    <div class="auth-error" id="authError" hidden></div>
+  </div>
+</div>
+
+<div class="fatal-gate" id="fatalGate" hidden>
+  <div class="fatal-card">
+    <h2 id="fatalTitle">Sin conexión con el servidor</h2>
+    <p id="fatalMsg"></p>
+    <button class="btn primary" id="btnFatalRetry">Reintentar</button>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="app.js?v=20260915"></script>
+</body>
+</html>
