@@ -3,7 +3,7 @@
 
   // Se muestra abajo de todo en Configuración. Sirve para saber de un vistazo si
   // el dispositivo está usando la versión nueva o una copia vieja en caché.
-  const VERSION = "2026-09-15";
+  const VERSION = "2026-09-15b";
 
   /* ============ helpers ============ */
   function normalize(s) {
@@ -622,19 +622,31 @@
         body: Object.assign({ accion: accion }, datos || {}),
       });
       if (error) {
-        // El cuerpo del error trae el mensaje que devolvió la función
-        let detalle = error.message || "Error desconocido";
+        console.error("admin-usuarios:", error);
+        const crudo = error.message || "Error desconocido";
+
+        // Caso 1: la función respondió, pero con un error. El motivo real viene
+        // en el cuerpo de la respuesta.
         try {
           const ctx = error.context;
           if (ctx && typeof ctx.json === "function") {
             const j = await ctx.json();
-            if (j && j.error) detalle = j.error;
+            if (j && j.error) return { error: j.error };
           }
-        } catch (e) { /* nos quedamos con el mensaje genérico */ }
-        if (/Failed to send|fetch/i.test(detalle)) {
-          detalle = "No se encontró la función 'admin-usuarios' en Supabase. Revisá el Paso 3d del README.";
+        } catch (e) { /* no había cuerpo legible: seguimos abajo */ }
+
+        // Caso 2: la llamada ni siquiera llegó. Puede ser que la función no
+        // exista, que esté con otro nombre, o que el navegador la haya
+        // bloqueado por las cabeceras (CORS). No adivinamos: mostramos las dos
+        // posibilidades y el mensaje textual, que es lo que permite distinguir.
+        if (/Failed to send|fetch|network/i.test(crudo)) {
+          return {
+            error: "No se pudo contactar la función 'admin-usuarios'. Revisá que exista con ese nombre exacto " +
+              "en Supabase → Edge Functions, y que sea la última versión del código (la anterior tenía un " +
+              "problema de cabeceras que el navegador bloquea). Detalle técnico: " + crudo,
+          };
         }
-        return { error: detalle };
+        return { error: crudo };
       }
       if (data && data.error) return { error: data.error };
       return { ok: true, mensaje: (data && data.mensaje) || "Listo." };

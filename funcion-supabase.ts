@@ -13,10 +13,17 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
+// OJO: la lista de cabeceras permitidas tiene que incluir TODAS las que manda la
+// librería de Supabase, no solo las obvias. Si falta una (por ejemplo
+// "x-client-info"), el navegador bloquea la llamada antes de que salga y el error
+// que se ve es un genérico "no se pudo contactar la función", que despista.
+// Esta lista es la que recomienda la documentación de Supabase.
 const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, content-type, apikey",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-retry-count, traceparent, tracestate, baggage",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+  "Access-Control-Max-Age": "86400",
 };
 
 const ROLES = ["director", "preceptor", "secretaria"];

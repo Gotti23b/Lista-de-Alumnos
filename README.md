@@ -317,7 +317,16 @@ Listo. No hace falta configurar ninguna clave: Supabase le pasa la suya automát
 
 **Sobre el costo:** el plan gratuito incluye 500.000 ejecuciones por mes. Crear usuarios son unas pocas por año, así que es gratis en la práctica.
 
-**Si alguna vez te da error:** en esa misma pantalla de Edge Functions podés ver los registros (*Logs*) de la función, que dicen qué pasó.
+### Si la app dice que no puede contactar la función
+
+Probá en este orden:
+
+1. **Que el nombre sea exactamente `admin-usuarios`.** Sin mayúsculas, con guion. Si la creaste con otro nombre, borrala y volvé a crearla bien: la app la busca por ese nombre exacto.
+2. **Que tenga la última versión del código.** La primera versión que entregué tenía una lista incompleta de cabeceras permitidas y el navegador bloqueaba la llamada antes de que saliera. Abrí la función en el editor de Supabase, borrá todo y pegá de nuevo el `funcion-supabase.ts` actual.
+3. **Revisá los registros.** En Edge Functions → tu función → pestaña **Logs**. Si ahí no aparece ninguna llamada, la petición ni siquiera llegó (problema de nombre o de cabeceras). Si aparece con error, el mensaje te dice qué pasó.
+4. **Si sigue sin andar**, en la configuración de la función buscá la opción **Verify JWT** y desactivala. Es seguro: la función verifica por su cuenta quién la llama y que sea Director activo, no depende de esa validación previa.
+
+El mensaje de error de la app ahora incluye el detalle técnico al final — si tenés que consultarlo, pasalo completo.
 
 ## Paso 4 — Publicar en GitHub Pages (sin usar la terminal)
 
