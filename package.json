@@ -1,0 +1,44 @@
+{
+  "name": "comedor-french",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Comedor French - aplicación multiplataforma",
+  "main": "electron-main.cjs",
+  "scripts": {
+    "desktop": "electron .",
+    "build:windows": "electron-builder --win nsis",
+    "cap:sync": "npx cap sync"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/core": "^7.4.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.3",
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "ar.edu.colegiofrench.comedor",
+    "productName": "Comedor French",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron-main.cjs",
+      "index.html",
+      "estilos.css",
+      "app.js",
+      "escudo.png"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
