@@ -1,0 +1,37 @@
+name: Compilar Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'estilos.css'
+      - 'app.js'
+      - 'escudo.png'
+      - 'package.json'
+      - 'capacitor.config.json'
+      - 'electron-main.cjs'
+      - '.github/workflows/build-windows.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Instalador Windows (.exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Compilar instalador
+        run: npm run build:windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Comedor-French-Windows
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 30
