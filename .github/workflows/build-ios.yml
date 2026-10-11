@@ -1,0 +1,40 @@
+name: Preparar iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'estilos.css'
+      - 'app.js'
+      - 'escudo.png'
+      - 'package.json'
+      - 'capacitor.config.json'
+      - '.github/workflows/build-ios.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  ios-project:
+    name: Proyecto iOS para Xcode
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Preparar archivos web
+        run: |
+          mkdir -p dist
+          cp index.html estilos.css app.js escudo.png dist/
+      - run: npx cap add ios
+      - run: npx cap sync ios
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Comedor-French-iOS-Xcode-Project
+          path: ios/
+          if-no-files-found: error
+          retention-days: 30
