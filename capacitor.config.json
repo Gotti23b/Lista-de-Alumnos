@@ -1,0 +1,8 @@
+{
+  "appId": "ar.edu.colegiofrench.comedor",
+  "appName": "Comedor French",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}
